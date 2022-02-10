@@ -8,7 +8,10 @@ output:
     toc: true
     toc_float: true
     toc_depth: 3
+    code_folding: hide
 ---
+
+<span style="color: red">Instructor comments and answers are in red.</span>
 
 **This assignment will be a bit light by the standards of the last two assignments. But that's because the mid-term's gonna be brutal... but fun! Okay, mostly fun. But challenging! Here, you practice your life table chops. Doing it efficiently and understanding the results will be crucial for the mid-term.**
 
@@ -18,6 +21,8 @@ output:
 if (!require("pacman")) install.packages("pacman")
 # p_load function loads packages if installed, or install then loads otherwise
 pacman::p_load(dplyr, ggplot2, knitr, kableExtra, readr)
+# Set knit kable options
+options(knitr.kable.NA = "")
 ```
 
 # Madagascar 1966
@@ -37,7 +42,10 @@ q01_data <- readRDS("data/q01_data.rds")
 **Below, fill in the missing column, `px`, appending it as a new column in the life table. Then display the result.**
 
 ```{r}
-
+q01_data$px <- 1 - q01_data$nqx
+q01_data %>%
+  knitr::kable() %>%
+  kableExtra::kable_classic()
 ```
 
 **0.5 points**
@@ -47,7 +55,60 @@ q01_data <- readRDS("data/q01_data.rds")
 **Using the methods we learned in class, build your own life table using the age-specific mortality rates in the life table that was provided to you for this question set. For the very young age groups, use the method we discussed in class and that is depicted in PHG table 3.3 on page 48 to estimate ${}_{n}a_x$. For all other age groups besides the open-ended age interval, assume that ${}_{n}a_x = n/2$. Display the result.**
 
 ```{r}
-
+# Functions to deal with youngest age groups
+## General functions
+ax_young <- function(m0, a, b, c) ifelse(m0 >= 0.107, a, b + c * m0)
+## Averaging both sexes, assuming typical sex ratio at birth
+ax_avg <- function(a0male, a0female) {
+  p_male <- 105 / (105 + 100)
+  p_male * a0male + (1 - p_male) * a0female
+}
+## For youngest age group 1a0
+a0_male <- function(m0) ax_young(m0, 0.330, 0.045, 2.684)
+a0_female <- function(m0) ax_young(m0, 0.350, 0.053, 2.800)
+a0_avg <- function(m0) ax_avg(a0_male(m0), a0_female(m0))
+## For a four-year age interval between 1 and 5 (i.e., 4a1)
+a1_male <- function(m0) ax_young(m0, 1.352, 1.651, -2.816)
+a1_female <- function(m0) ax_young(m0, 1.361, 1.522, -1.518)
+a1_avg <- function(m0) ax_avg(a1_male(m0), a1_female(m0))
+# Build period life table
+m66plt <- q01_data %>%
+  dplyr::select(x, nMx) %>%
+  dplyr::mutate(
+    nx = dplyr::lead(x) - x,
+    ax = dplyr::case_when(
+      x < 1 ~ a0_avg(nMx),
+      x < 4 ~ a1_avg(nMx),
+      x != max(x) ~ nx / 2,
+      TRUE ~ NA_real_
+    ),
+    qx = ((nx * nMx) / (1 + (nx - ax) * nMx)) %>%
+      dplyr::coalesce(1),
+    px = 1 - qx
+  )
+l0 <- 100000
+lx <- l0
+x <- m66plt$x
+npx <- m66plt$px
+for (a in x[-length(x)]) {
+  l <- lx[which(x == a)] * npx[which(x == a)]
+  lx <- c(lx, l)
+}
+m66plt$lx <- lx
+m66plt <- m66plt %>%
+  dplyr::mutate(
+    dx = lx * qx,
+    Lx = dplyr::case_when(
+      x < max(x) ~ nx * dplyr::lead(lx) + ax * dx,
+      x == max(x) ~ lx / nMx
+    ),
+    Tx = rev(Lx) %>% cumsum() %>% rev(),
+    ex = Tx / lx
+  ) %>%
+  dplyr::select(-nx)
+m66plt %>%
+  knitr::kable() %>%
+  kableExtra::kable_classic()
 ```
 
 **1 point**
@@ -56,13 +117,37 @@ q01_data <- readRDS("data/q01_data.rds")
 
 **Using whatever means at your disposal (plots, tables, arithmetic, statistical methods) compare the ${}_{n}a_x$ values between the two life tables. With reference to the observed period age-specific mortality and to our lessons in class, explain the comparisons you draw.**
 
-```{r}
-
-```
-
 **Explanation below**
 
+```{r}
+ax_comp <- dplyr::inner_join(
+  q01_data %>%
+    dplyr::filter(x < 5) %>%
+    dplyr::rename(ax_demogR = nax) %>%
+    dplyr::select(x, ax_demogR),
+  m66plt %>%
+    dplyr::filter(x < 5) %>%
+    dplyr::rename(ax_me = ax) %>%
+    dplyr::select(x, ax_me)
+) %>%
+  dplyr::mutate(
+    diff = ax_me - ax_demogR,
+    pdiff = scales::percent(diff / ax_demogR)
+  ) %>%
+  dplyr::select(x, ax_me, ax_demogR, everything())
+```
 
+
+<span style="color: red">For all age groups but those between birth and five, and the open-ended age interval, both life tables assume that ${}_{n}a_x = n/2$. For the open-ended age interval, I don't calculate the ${}_{n}a_x$ values, so there is no basis for comparison. Below is a table of the difference (`diff`) and percent difference (`pdiff`) in person-years between my life table's ${}_{n}a_x$ values (`ax_me`) and those from `demogR` (`ax_demogR`), listed for age groups beginning at exact age `x` younger than five.</span>
+
+```{r}
+ax_comp %>%
+  dplyr::mutate_at(vars(starts_with("ax"), diff), ~round(., 2)) %>%
+  knitr::kable() %>%
+  kableExtra::kable_classic(full_width = FALSE)
+```
+
+<span style="color: red">As expected, the relative difference is greatest for the youngest age group, where the force of mortality is decreasing fastest within the age interval. Yet the difference in person years is only `r ax_comp$diff` person-years. Ultimately, this leads to a difference in life expectancy at birth $e_0$ of only `r round(m66plt$ex[1] - q01_data$ex[1], 2)` person-years between me and `demogR`. The cost of this error (if it even is an error; who is to say that the default settings of `demogR::life.table` are optimal in this scenario?) depends on the goal of the analysis.</span>
 
 **1 point**
 
@@ -76,7 +161,7 @@ https://www.who.int/healthinfo/paper08.pdf
 
 **Response below**
 
-
+<span style="color: red">In estimating ${}_{n}a_x$ values for the very young age groups, we used a parameterization derived from West model life tables. But we didn't make sure the West model life table is appropriate for Madagascar in 1966. Similarly, when I created the life table using `demogR`, I didn't check whether the `life.table` function's default methods were appropriate for that setting, either. In this course, I give you the tools you need to understand the fundamentals of life table methods. I encourage you to continue your education in demographic methods with more advanced coursework if you want to know how to select (or if necessary derive) the appropriate methods for estimating unknown quantities required for life table construction in a particular setting.</span>
 
 **0.5 points**
 
@@ -89,25 +174,51 @@ https://www.who.int/healthinfo/paper08.pdf
 * **0.5 points for getting expected age at death correct**
 * **0.5 points for a well-reasoned explanation of the pattern**
 
-```{r}
-
-```
-
 **Explanation below**
 
+<span style="color: red">Below is a table of the expected age at death by exact age. It rises throughout the life-cycle for this Madagascar 1966 life table.</span>
 
+```{r}
+exp_death <- q01_data %>%
+  dplyr::mutate(expected_age_at_death = x + ex) %>%
+  dplyr::select(x, ex, expected_age_at_death)
+exp_death %>%
+  knitr::kable() %>%
+  kableExtra::kable_classic(full_width = FALSE)
+```
+
+<span style="color: red">Below is a plot of expected age at death by exact age.</span>
+
+```{r}
+exp_death %>%
+  ggplot2::ggplot() +
+  ggplot2::geom_step(aes(x = x, y = expected_age_at_death), color = "red")
+```
+
+<span style="color: red">Below is the age-specific mortality schedule for this population. The extremely high childhood mortality explains the rapid climb in expected age at death from ages 0 to 10. After that, the steady climb is explained by the rapidly increasing and extremely high mortality at ages above 60. At each subsequent age `x`, an individual has survived through more and more of this rapidly-increasing mortality. As a result, their expected age at death rises with age up to the open-ended age interval. Perhaps if we had data on age groups older than 85, we would see the expected age at death start to diminish with age.</span>
+
+```{r}
+q01_data %>%
+  ggplot2::ggplot() +
+  ggplot2::geom_step(aes(x = x, y = nMx), color = "red")
+```
 
 ## Working-aged person-years
 
 **Recall that ${}_{n}L_x$ is the age-specific person-years lived in an age interval while $T_x$ is the total person-years lived above exact age $x$. With that in mind, use the `demogR` life table to calculate the number of person-years lived in the working age interval between 15 and 65.**
 
 ```{r}
-
+working_years <- q01_data %>%
+  dplyr::filter(x %in% c(15, 65)) %>%
+  dplyr::arrange(x) %>%
+  dplyr::mutate(working_years = Tx - dplyr::lead(Tx)) %>%
+  dplyr::filter(!is.na(working_years)) %>%
+  dplyr::pull(working_years)
 ```
 
 **Answer in a full sentence below**
 
-
+<span style="color: red">In the hypothetical cohort of size 1 that passes through the mortality schedule of Madagascar in 1966, the total person-years lived in the working age interval between 15 and 65 is `r working_years` years. Of course, this quantity is only relevant to this hypothetical cohort. A more generalizability quanity is $(T_{15} - T_{65})/l_{x \leq 15}$, which is the expected years that someone who lives to some exact age $x \leq 15$ can expect to live between 15 ad 65. For newborns in this hypothetical cohort, that value happens to also be `r working_years/1`, but only because the radix for this life table is equal to one. For another age $x$, the value $l_x \neq 1$, the total and expected years lived would not be the same.</span>
 
 **0.5 points**
 
@@ -116,7 +227,10 @@ https://www.who.int/healthinfo/paper08.pdf
 **For each age interval, calculate the TOTAL person-years lived among those who died in the age interval, and append it to the life table generated by `demogR`**
 
 ```{r}
-
+q01_data %>%
+  dplyr::mutate(nAx = nax * ndx) %>%
+  knitr::kable() %>%
+  kableExtra::kable_classic(full_width = FALSE)
 ```
 
 **0.5 points**
@@ -138,7 +252,39 @@ q02_data <- readRDS("data/q02_data.rds")
 **Build a period life table using the data, assuming that ${}_{n}a_x = n/2$ across all age groups. Display the results.**
 
 ```{r}
-
+# Build period life table
+u13plt <- q02_data %>%
+  dplyr::select(x, mx) %>%
+  dplyr::mutate(
+    nx = dplyr::lead(x) - x,
+    ax = nx/2,
+    qx = ((nx * mx) / (1 + (nx - ax) * mx)) %>%
+      dplyr::coalesce(1),
+    px = 1 - qx
+  )
+l0 <- 100000
+lx <- l0
+x <- u13plt$x
+npx <- u13plt$px
+for (a in x[-length(x)]) {
+  l <- lx[which(x == a)] * npx[which(x == a)]
+  lx <- c(lx, l)
+}
+u13plt$lx <- lx
+u13plt <- u13plt %>%
+  dplyr::mutate(
+    dx = lx * qx,
+    Lx = dplyr::case_when(
+      x < max(x) ~ nx * dplyr::lead(lx) + ax * dx,
+      x == max(x) ~ lx / mx
+    ),
+    Tx = rev(Lx) %>% cumsum() %>% rev(),
+    ex = Tx / lx
+  ) %>%
+  dplyr::select(-nx)
+u13plt %>%
+  knitr::kable() %>%
+  kableExtra::kable_classic()
 ```
 
 **1 point**
@@ -148,6 +294,8 @@ q02_data <- readRDS("data/q02_data.rds")
 **Do you notice anything strange about the results? If so, explain what's happening with reference to what we've learned in class.**
 
 **1 point**
+
+<span style="color: red">For the 100-105 and 105-110 age groups, ${}_{n}q_x > 1$ because the age-specific mortality rates satisfy the inequality $1/{}_{n}m_x < n/2$. That is, the expected time to death after age `x` (the inverse of the age-specific mortality rate) is shorter than the mid-period. As a result, the numerator of the ${}_{n}q_x$ conversion equation is greater than the denominator, leading to an invalid age-specific probability estimate.</span>
 
 **Sub-total available: 2 points**
 
